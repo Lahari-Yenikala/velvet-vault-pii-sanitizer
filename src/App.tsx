@@ -25,9 +25,11 @@ const App: React.FC = () => {
   };
 
   const handleSignupSuccess = (user: AuthUser) => {
+    // After successful registration, redirect to login page
     setCurrentUser(user);
-    setPage('app');
+    setPage('login');
   };
+
 
   const handleLogout = () => {
     authLogout();
