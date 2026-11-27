@@ -26,7 +26,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   hasContent,
 }) => {
   return (
-    <header className="sticky top-0 z-40 border-b border-[rgba(212,175,55,0.22)] bg-[rgba(9,9,11,0.96)] backdrop-blur-md">
+    <header className="sticky top-0 z-40 border-b border-[rgba(245,197,66,0.28)] bg-[rgba(15,13,22,0.82)] backdrop-blur-xl">
       <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 sm:px-6">
         {/* Brand */}
         <div className="flex shrink-0 items-center gap-3">

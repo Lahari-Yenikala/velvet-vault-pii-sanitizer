@@ -34,7 +34,7 @@ const STEPS = [
 
 export const ArchitecturePipeline: React.FC = () => {
   return (
-    <section id="architecture" className="border-t border-[rgba(212,175,55,0.1)] bg-[#0d0d10] px-4 py-16 sm:px-6">
+    <section id="architecture" className="border-t border-[rgba(245,197,66,0.2)] bg-[rgba(14,12,20,0.62)] px-4 py-16 backdrop-blur-sm sm:px-6">
       <div className="mx-auto max-w-[1600px]">
         <div className="mb-10 text-center">
           <span className="font-mono text-xs tracking-wider text-[#D4AF37] uppercase">

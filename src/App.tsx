@@ -27,6 +27,7 @@ import { TelemetryBar } from './components/TelemetryBar';
 import { PseudonymDrawer } from './components/PseudonymDrawer';
 import { ArchitecturePipeline } from './components/ArchitecturePipeline';
 import { EnterpriseFooter } from './components/EnterpriseFooter';
+import { Vault3DBackground } from './components/Vault3DBackground';
 
 // Legacy inline control deck for Studio tab
 import { ControlDeck } from './components/ControlDeck';
@@ -99,8 +100,11 @@ export const App: React.FC = () => {
   }, [handlePanicPurge]);
 
   return (
-    <div className="min-h-screen bg-[#09090B] text-[#F5F5F4]" key={purgeEpoch}>
-      {/* Sticky Navbar */}
+    <div className="relative min-h-screen bg-[#0b0a0f] text-[#F5F5F4]" key={purgeEpoch}>
+      <Vault3DBackground />
+
+      <div className="relative z-10 flex min-h-screen flex-col">
+        {/* Sticky Navbar */}
       <Navbar
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -226,6 +230,7 @@ export const App: React.FC = () => {
         lineCount={lineCount}
         charCount={charCount}
       />
+      </div>
     </div>
   );
 };
