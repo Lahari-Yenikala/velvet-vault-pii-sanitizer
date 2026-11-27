@@ -1,5 +1,6 @@
 import React from 'react';
-import { Flame, Lock, ShieldCheck } from 'lucide-react';
+import { Flame, Lock, ShieldCheck, LogOut } from 'lucide-react';
+import type { AuthUser } from '../auth/authStore';
 
 export type TabId = 'studio' | 'batch' | 'regex' | 'audit';
 
@@ -9,6 +10,8 @@ interface NavbarProps {
   onPanicPurge: () => void;
   purgeFlash: boolean;
   hasContent: boolean;
+  user?: AuthUser;
+  onLogout?: () => void;
 }
 
 const TABS: { id: TabId; label: string; shortLabel: string }[] = [
@@ -24,6 +27,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onPanicPurge,
   purgeFlash,
   hasContent,
+  user,
+  onLogout,
 }) => {
   return (
     <header className="sticky top-0 z-40 border-b border-[rgba(245,197,66,0.28)] bg-[rgba(15,13,22,0.82)] backdrop-blur-xl">
@@ -99,6 +104,27 @@ export const Navbar: React.FC<NavbarProps> = ({
             <Flame className="h-3.5 w-3.5 text-[#D4AF37]" />
             <span className="hidden sm:inline">{purgeFlash ? 'Purged' : 'Panic Purge'}</span>
           </button>
+
+          {/* User + Logout */}
+          {user && onLogout && (
+            <div className="flex items-center gap-2 ml-1">
+              <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5">
+                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-[#9B1B30] to-[#4A0E17] flex items-center justify-center text-[9px] font-bold text-[#D4AF37] uppercase">
+                  {user.fullName.charAt(0)}
+                </div>
+                <span className="text-[10px] text-[#F3E5AB] font-medium max-w-[90px] truncate">{user.fullName}</span>
+              </div>
+              <button
+                type="button"
+                onClick={onLogout}
+                title="Sign out"
+                className="flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-white/[0.03] px-2.5 py-2 text-[10px] font-medium text-stone-400 hover:text-[#F3E5AB] hover:border-[#D4AF37]/30 hover:bg-[rgba(74,14,23,0.4)] transition-all"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Sign Out</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
