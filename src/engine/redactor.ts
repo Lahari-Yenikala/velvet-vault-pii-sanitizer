@@ -20,6 +20,18 @@ import {
 
 export type RedactionMode = 'FULL' | 'PARTIAL' | 'PSEUDO';
 
+export type RiskSeverity = 'NONE' | 'LOW' | 'MEDIUM' | 'CRITICAL';
+
+export interface CustomRule {
+  id: string;
+  name: string;
+  pattern: string;
+  flags: string;
+  maskLabel: string;
+  enabled: boolean;
+  description?: string;
+}
+
 export interface DetectedEntity extends RawMatch {
   id: string;
   replacement: string;
@@ -45,6 +57,15 @@ export interface AuditCounts {
   PAN: number;
   AADHAAR: number;
   CARD: number;
+  CUSTOM: number;
+}
+
+export interface RiskAssessment {
+  severity: RiskSeverity;
+  score: number;
+  highRiskCount: number;
+  densityPer100Words: number;
+  summary: string;
 }
 
 export interface SanitizationResult {
@@ -54,6 +75,7 @@ export interface SanitizationResult {
   counts: AuditCounts;
   luhnFalsePositivesIgnored: number;
   sessionMappings: PseudonymEntry[];
+  risk: RiskAssessment;
 }
 
 export const DEFAULT_DETECTOR_TOGGLES: DetectorToggles = {
@@ -65,6 +87,36 @@ export const DEFAULT_DETECTOR_TOGGLES: DetectorToggles = {
   CARD: true,
 };
 
+export const DEFAULT_CUSTOM_RULES: CustomRule[] = [
+  {
+    id: 'builtin-upi',
+    name: 'Indian UPI Handles',
+    pattern: '[a-zA-Z0-9._-]{2,}@(?:okaxis|okicici|okhdfcbank|oksbi|ybl|paytm|upi|ibl|axl)\\b',
+    flags: 'gi',
+    maskLabel: '[REDACTED_UPI]',
+    enabled: true,
+    description: 'Detects NPCI VPA handles (@ybl, @okicici, @oksbi, @paytm, etc.)',
+  },
+  {
+    id: 'builtin-emp',
+    name: 'Enterprise Employee IDs',
+    pattern: '\\bEMP-[0-9]{4,8}\\b',
+    flags: 'g',
+    maskLabel: '[REDACTED_EMP_ID]',
+    enabled: true,
+    description: 'Detects internal HR/IAM employee identifiers (EMP-XXXX)',
+  },
+  {
+    id: 'builtin-apikey',
+    name: 'Bearer & API Secret Keys',
+    pattern: '\\b(?:sk_live|pk_live|vv_sec|ghp)_[A-Za-z0-9]{10,}\\b',
+    flags: 'g',
+    maskLabel: '[REDACTED_API_KEY]',
+    enabled: true,
+    description: 'Detects production API tokens and secret key prefixes',
+  },
+];
+
 export const FULL_MASK_LABELS: Record<PIIEntityType, string> = {
   EMAIL: '[REDACTED_EMAIL]',
   PHONE: '[REDACTED_PHONE]',
@@ -72,6 +124,7 @@ export const FULL_MASK_LABELS: Record<PIIEntityType, string> = {
   PAN: '[REDACTED_PAN]',
   AADHAAR: '[REDACTED_AADHAAR]',
   IP: '[REDACTED_IP]',
+  CUSTOM: '[REDACTED_CUSTOM]',
 };
 
 export function createEmptyCounts(): AuditCounts {
@@ -82,6 +135,7 @@ export function createEmptyCounts(): AuditCounts {
     PAN: 0,
     AADHAAR: 0,
     CARD: 0,
+    CUSTOM: 0,
   };
 }
 
@@ -97,7 +151,28 @@ export function clearPseudonymSession(session: PseudonymSession): void {
   session.counters = createEmptyCounts();
 }
 
-function getCanonicalKey(type: PIIEntityType, raw: string): string {
+/**
+ * Compiles a user-supplied regex pattern safely, guaranteeing the global 'g' flag.
+ */
+export function compileSafeRegex(
+  pattern: string,
+  flags = 'g'
+): { regex: RegExp | null; error: string | null } {
+  if (!pattern.trim()) {
+    return { regex: null, error: 'Regex pattern cannot be empty.' };
+  }
+  try {
+    const cleanFlags = Array.from(new Set((flags.replace(/[^gimsuy]/g, '') + 'g').split(''))).join('');
+    return { regex: new RegExp(pattern, cleanFlags), error: null };
+  } catch (err) {
+    return {
+      regex: null,
+      error: err instanceof Error ? err.message : 'Invalid regular expression.',
+    };
+  }
+}
+
+function getCanonicalKey(type: PIIEntityType, raw: string, customRuleId?: string): string {
   switch (type) {
     case 'EMAIL':
       return `EMAIL:${raw.trim().toLowerCase()}`;
@@ -109,6 +184,8 @@ function getCanonicalKey(type: PIIEntityType, raw: string): string {
       return `${type}:${extractDigits(raw)}`;
     case 'IP':
       return `IP:${raw.trim().toLowerCase()}`;
+    case 'CUSTOM':
+      return `CUSTOM:${customRuleId ?? 'rule'}:${raw.trim()}`;
   }
 }
 
@@ -175,15 +252,22 @@ export function formatPartialMask(type: PIIEntityType, raw: string): string {
       if (octets.length !== 4) return '[REDACTED_IP]';
       return `${octets[0]}.${octets[1]}.***.***`;
     }
+
+    case 'CUSTOM': {
+      const trimmed = raw.trim();
+      if (trimmed.length <= 4) return '****';
+      return `${trimmed.slice(0, 2)}${'*'.repeat(Math.min(8, trimmed.length - 4))}${trimmed.slice(-2)}`;
+    }
   }
 }
 
 function getOrCreatePseudonym(
   session: PseudonymSession,
   type: PIIEntityType,
-  rawValue: string
+  rawValue: string,
+  customRuleId?: string
 ): string {
-  const canonicalKey = getCanonicalKey(type, rawValue);
+  const canonicalKey = getCanonicalKey(type, rawValue, customRuleId);
   const existing = session.map.get(canonicalKey);
   if (existing) {
     existing.occurrences += 1;
@@ -205,9 +289,6 @@ function getOrCreatePseudonym(
   return placeholder;
 }
 
-/**
- * Checks if a card-like separator structure looks like a genuine card/ID rather than unrelated numbers.
- */
 function hasPlausibleCardSeparators(candidate: string): boolean {
   if (!/[ -]/.test(candidate)) {
     return true;
@@ -223,15 +304,75 @@ function hasPlausibleCardSeparators(candidate: string): boolean {
 }
 
 /**
- * Scans raw input text for enabled PII categories, enforces cryptographic/checksum
- * validation (Luhn, Verhoeff, PAN entity codes, IPv4 octets), resolves overlapping
- * intervals safely, and renders the sanitized text for the chosen redaction mode.
+ * Evaluates PII exposure severity from high-risk identity/financial density.
+ */
+export function assessPIIRisk(
+  counts: AuditCounts,
+  totalRedacted: number,
+  inputText: string
+): RiskAssessment {
+  const highRiskCount = counts.CARD + counts.AADHAAR + counts.PAN;
+  const words = inputText.trim() ? inputText.trim().split(/\s+/).length : 0;
+  const densityPer100Words = words > 0 ? Number(((totalRedacted / words) * 100).toFixed(1)) : 0;
+
+  if (totalRedacted === 0) {
+    return {
+      severity: 'NONE',
+      score: 0,
+      highRiskCount: 0,
+      densityPer100Words: 0,
+      summary: 'No regulated PII signatures detected in active buffer.',
+    };
+  }
+
+  const rawScore = Math.min(
+    100,
+    highRiskCount * 16 +
+      (counts.EMAIL + counts.PHONE + counts.CUSTOM) * 6 +
+      counts.IP * 4 +
+      Math.round(densityPer100Words * 1.4)
+  );
+
+  if (highRiskCount >= 3 || rawScore >= 65) {
+    return {
+      severity: 'CRITICAL',
+      score: rawScore,
+      highRiskCount,
+      densityPer100Words,
+      summary: `${highRiskCount} regulated financial/national ID tokens detected (${densityPer100Words} PII / 100 words).`,
+    };
+  }
+
+  if (highRiskCount >= 1 || totalRedacted >= 4 || rawScore >= 30) {
+    return {
+      severity: 'MEDIUM',
+      score: rawScore,
+      highRiskCount,
+      densityPer100Words,
+      summary: `Moderate exposure: ${totalRedacted} PII entities across ${highRiskCount} high-sensitivity records.`,
+    };
+  }
+
+  return {
+    severity: 'LOW',
+    score: rawScore,
+    highRiskCount,
+    densityPer100Words,
+    summary: `Low exposure: ${totalRedacted} contact or network identifier(s) detected.`,
+  };
+}
+
+/**
+ * Scans raw input text for enabled built-in & custom PII categories, enforces
+ * checksum validation (Luhn, Verhoeff, PAN entity codes, IPv4 octets), resolves
+ * overlapping intervals safely, and renders sanitized output.
  */
 export function sanitizeText(
   input: string,
   mode: RedactionMode,
   toggles: DetectorToggles = DEFAULT_DETECTOR_TOGGLES,
-  existingSession?: PseudonymSession
+  existingSession?: PseudonymSession,
+  customRules: CustomRule[] = []
 ): SanitizationResult {
   if (!input) {
     const session = existingSession ?? createPseudonymSession();
@@ -243,6 +384,7 @@ export function sanitizeText(
       counts: createEmptyCounts(),
       luhnFalsePositivesIgnored: 0,
       sessionMappings: [],
+      risk: assessPIIRisk(createEmptyCounts(), 0, ''),
     };
   }
 
@@ -278,7 +420,6 @@ export function sanitizeText(
       const start = match.index ?? 0;
       const end = start + value.length;
 
-      // Avoid matching decimal numbers like 1234.567890123456
       const charBefore = start > 0 ? input[start - 1] : '';
       const charBeforeBefore = start > 1 ? input[start - 2] : '';
       if (charBefore === '.' && /\d/.test(charBeforeBefore)) {
@@ -424,10 +565,39 @@ export function sanitizeText(
     }
   }
 
-  // Merge/resolve overlapping spans deterministically
+  // 7. Custom Pattern & Regex Studio Rules
+  for (const rule of customRules) {
+    if (!rule.enabled) continue;
+    const { regex } = compileSafeRegex(rule.pattern, rule.flags);
+    if (!regex) continue;
+
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(input)) !== null) {
+      if (match[0].length === 0) {
+        regex.lastIndex += 1;
+        continue;
+      }
+      const value = match[0];
+      const start = match.index;
+      const end = start + value.length;
+      if (overlapsAnyInterval({ start, end }, rejectedCardIntervals)) {
+        continue;
+      }
+      rawMatches.push({
+        start,
+        end,
+        value,
+        type: 'CUSTOM',
+        subType: rule.name,
+        metadata: `Custom regex rule`,
+        customMaskLabel: rule.maskLabel || '[REDACTED_CUSTOM]',
+        customRuleId: rule.id,
+      });
+    }
+  }
+
   const resolved = resolveOverlappingMatches(rawMatches);
 
-  // Build deterministic pseudonym map in order of appearance
   const session = existingSession ?? createPseudonymSession();
   clearPseudonymSession(session);
 
@@ -440,12 +610,11 @@ export function sanitizeText(
     const item = resolved[i];
     counts[item.type] += 1;
 
-    // Always register in pseudonym session so toggling into PSEUDO or inspecting the map stays deterministic
-    const pseudoPlaceholder = getOrCreatePseudonym(session, item.type, item.value);
+    const pseudoPlaceholder = getOrCreatePseudonym(session, item.type, item.value, item.customRuleId);
 
     let replacement: string;
     if (mode === 'FULL') {
-      replacement = FULL_MASK_LABELS[item.type];
+      replacement = item.customMaskLabel ?? FULL_MASK_LABELS[item.type];
     } else if (mode === 'PARTIAL') {
       replacement = formatPartialMask(item.type, item.value);
     } else {
@@ -465,6 +634,8 @@ export function sanitizeText(
 
   chunks.push(input.slice(cursor));
 
+  const risk = assessPIIRisk(counts, entities.length, input);
+
   return {
     sanitizedText: chunks.join(''),
     entities,
@@ -472,5 +643,6 @@ export function sanitizeText(
     counts,
     luhnFalsePositivesIgnored,
     sessionMappings: Array.from(session.map.values()),
+    risk,
   };
 }

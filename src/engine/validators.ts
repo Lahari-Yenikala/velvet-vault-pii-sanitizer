@@ -1,6 +1,8 @@
-export type PIIEntityType = 'EMAIL' | 'PHONE' | 'IP' | 'PAN' | 'AADHAAR' | 'CARD';
+export type BuiltInPIIType = 'EMAIL' | 'PHONE' | 'IP' | 'PAN' | 'AADHAAR' | 'CARD';
 
-export type DetectorToggles = Record<PIIEntityType, boolean>;
+export type PIIEntityType = BuiltInPIIType | 'CUSTOM';
+
+export type DetectorToggles = Record<BuiltInPIIType, boolean>;
 
 export interface TextInterval {
   start: number;
@@ -12,6 +14,8 @@ export interface RawMatch extends TextInterval {
   type: PIIEntityType;
   subType?: string;
   metadata?: string;
+  customMaskLabel?: string;
+  customRuleId?: string;
 }
 
 export const PAN_ENTITY_TYPES: Record<string, string> = {
@@ -28,8 +32,9 @@ export const PAN_ENTITY_TYPES: Record<string, string> = {
 };
 
 const ENTITY_PRIORITY: Record<PIIEntityType, number> = {
-  EMAIL: 6,
-  CARD: 5,
+  EMAIL: 7,
+  CARD: 6,
+  CUSTOM: 5,
   AADHAAR: 4,
   PAN: 3,
   IP: 2,
@@ -310,12 +315,11 @@ export function overlapsAnyInterval(candidate: TextInterval, merged: TextInterva
 
 /**
  * Resolves overlapping PII matches deterministically so string slicing never corrupts indices.
- * Priority: earlier start -> higher specificity/longer span -> higher entity priority.
+ * Priority: higher entity priority -> longer span -> earlier start.
  */
 export function resolveOverlappingMatches(matches: RawMatch[]): RawMatch[] {
   if (matches.length <= 1) return [...matches];
 
-  // Rank candidates by priority + span length so stronger/broader matches claim their span first.
   const ranked = [...matches].sort((a, b) => {
     const prioDiff = ENTITY_PRIORITY[b.type] - ENTITY_PRIORITY[a.type];
     if (prioDiff !== 0) return prioDiff;

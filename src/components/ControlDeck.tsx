@@ -199,7 +199,7 @@ export const ControlDeck: React.FC<ControlDeckProps> = ({
             Active Detectors:
           </span>
           {DETECTOR_META.map(({ type, label, hint }) => {
-            const enabled = toggles[type];
+            const enabled = toggles[type as keyof DetectorToggles] ?? false;
             return (
               <button
                 key={type}
